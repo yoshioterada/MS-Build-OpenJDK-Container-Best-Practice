@@ -1,0 +1,41 @@
+##################################################################
+# Stage 1: Create User and Group
+##################################################################
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS CREATE-DEPENDS-FILES
+
+RUN mkdir /staging \
+    && mkdir /staging/etc \
+    && tdnf install -y  --releasever=2.0 shadow-utils \
+    && groupadd --system -g 2000 java-app \
+    && useradd -u 2000 -g java-app --shell /bin/false \
+       --home-dir /dev/null --system javausers \
+    && tdnf clean all \
+    # Copy user/group info to staging
+    && cp /etc/passwd /staging/etc/passwd \
+    && cp /etc/group /staging/etc/group \
+    && mkdir /app \
+    && chown -R javausers:java-app /app
+
+##################################################################
+# Stage 2: Create Production Image
+##################################################################
+FROM mcr.microsoft.com/openjdk/jdk:17-distroless
+
+ENV LANG='ja_JP.UTF-8' LANGUAGE='ja_JP:ja' LC_ALL='ja_JP.UTF-8'
+ENV TZ='Asia/Tokyo'
+COPY --from=CREATE-DEPENDS-FILES /staging/ / 
+
+USER javausers
+WORKDIR /app
+ENV JAVA_HOME=/app
+
+COPY --from=CREATE-DEPENDS-FILES --chown=javausers:java-app /app /app
+COPY --chown=javausers:java-app ../target/custom-jre-sample-0.0.1-SNAPSHOT.jar app.jar
+
+ENTRYPOINT ["java","-Xmx1g",\
+            "-XX:+UseParallelGC",\
+            "-XX:+TieredCompilation",\
+            "-XX:MaxRAMPercentage=75",\
+            "-jar","/app/app.jar"]
+EXPOSE 8080
+

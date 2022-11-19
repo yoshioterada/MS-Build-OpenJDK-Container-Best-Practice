@@ -1,0 +1,59 @@
+##################################################################
+# Stage 1. Copy reusable Custom JRE
+
+# FROM yoshio.azurecr.io/tyoshio2002/custom-jre:22 AS CUSTOM-JRE
+# is custom JRE image name which is created for this application
+# And name of the image must as follows in "0-config-env-values.sh"
+
+# export DOCKER_REPOSITORY=yoshio.azurecr.io
+# export DOCKER_IMAGE_NAME_PREFIX=tyoshio2002
+# export DOCKER_IMAGE_NAME_FOR_CUSTOM_JRE=custom-jre
+##################################################################
+FROM yoshio.azurecr.io/tyoshio2002/custom-jre:22 AS CUSTOM-JRE
+
+##################################################################
+# Stage 2: Get Zlib and Create User and Group
+##################################################################
+FROM mcr.microsoft.com/cbl-mariner/base/core:2.0 AS ZLIB-INSTALLER
+
+RUN mkdir -p /staging/etc \
+    && mkdir /app \
+    && tdnf install -y --releasever=2.0 --installroot /staging zlib \
+    && tdnf install -y  --releasever=2.0 shadow-utils \
+    && groupadd --system -g 2000 java-app \
+    && useradd -u 2000 -g java-app --shell /bin/false --home-dir \
+        /dev/null --system javauser \
+    && tdnf clean all \
+    # Copy user/group info to staging
+    && cp /etc/passwd /staging/etc/passwd \
+    && cp /etc/group /staging/etc/group
+
+##################################################################
+# Stage 3: Create Production Image by using Custom JRE
+##################################################################
+FROM mcr.microsoft.com/cbl-mariner/distroless/minimal:2.0 AS CBLMIN
+# FROM mcr.microsoft.com/cbl-mariner/distroless/base:2.0 AS CBLMIN
+
+ENV LANG='ja_JP.UTF-8' LANGUAGE='ja_JP:ja' LC_ALL='ja_JP.UTF-8'
+ENV TZ='Asia/Tokyo'
+
+ARG DEPENDENCY=/workspace/app/
+COPY --from=ZLIB-INSTALLER /staging/ /
+
+USER javauser
+COPY --from=ZLIB-INSTALLER --chown=javauser:java-app /app/ /app/
+COPY --from=CUSTOM-JRE --chown=javauser:java-app ${DEPENDENCY}/custom-jre /app/jre
+
+WORKDIR /app
+ENV JAVA_HOME=/app
+
+# COPY the Spring Boot application artifact from Local
+COPY --chown=javauser:java-app \
+    ./target/custom-jre-sample-0.0.1-SNAPSHOT.jar app.jar
+
+ENTRYPOINT ["/app/jre/bin/java","-XX:+UseParallelGC",\
+            "-XX:+TieredCompilation",\
+            "-XX:SharedArchiveFile=/app/jre/my-shared-libs-production.jsa",\
+            "-Xmx1g","-XX:+UseParallelGC","-XX:MaxRAMPercentage=75",\
+            "-jar","/app/app.jar"]
+EXPOSE 8080
